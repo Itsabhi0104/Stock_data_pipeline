@@ -78,7 +78,7 @@ session.mount("https://", adapter)
 session.mount("http://", adapter)
 
 
-# === Provider implementations ===
+# === Helper functions ===
 
 def _safe_float(v: Optional[Any]) -> Optional[float]:
     try:
@@ -106,6 +106,8 @@ def _parse_percent_string(s: Optional[str]) -> Optional[float]:
     except Exception:
         return None
 
+
+# === Provider implementations ===
 
 def _fetch_alphavantage(symbols: List[str]) -> List[Dict[str, Any]]:
     if not ALPHAVANTAGE_API_KEY:
@@ -154,41 +156,52 @@ def _fetch_alphavantage(symbols: List[str]) -> List[Dict[str, Any]]:
 def _fetch_yfinance(symbols: List[str]) -> List[Dict[str, Any]]:
     if not HAVE_YFINANCE:
         raise RuntimeError("yfinance not installed. Add 'yfinance' to requirements and rebuild the image.")
+    
     results = []
     for symbol in symbols:
         attempt = 0
         while attempt < MAX_ATTEMPTS:
             attempt += 1
             try:
-                t = yf.Ticker(symbol)
-                hist = t.history(period="2d", interval="1m")
-                price = None; vol = None; change = None; pct = None
-                if hist is not None and not hist.empty:
-                    last = hist.iloc[-1]
-                    price = float(last["Close"]) if "Close" in last.index else None
-                    vol = int(last["Volume"]) if "Volume" in last.index and not (last["Volume"] is None) else None
-                    if len(hist) >= 2:
-                        prev = hist.iloc[-2]
-                        change = (price - float(prev["Close"])) if price is not None else None
-                        if prev["Close"]:
-                            pct = (change / float(prev["Close"]) * 100) if (change is not None) and prev["Close"] else None
+                ticker = yf.Ticker(symbol)
+                # Get basic info first
+                info = ticker.info
+                
+                # Try to get current price from info
+                price = info.get("regularMarketPrice") or info.get("currentPrice") or info.get("previousClose")
+                change = info.get("regularMarketChange")
+                percent_change = info.get("regularMarketChangePercent")
+                volume = info.get("regularMarketVolume") or info.get("volume")
+                
+                # If we don't have price from info, try history
                 if price is None:
-                    info = t.info or {}
-                    price = info.get("regularMarketPrice") or info.get("previousClose")
-                    vol = vol or info.get("volume") or info.get("regularMarketVolume")
-                    change = change or info.get("regularMarketChange")
-                    pct = pct or info.get("regularMarketChangePercent")
+                    try:
+                        hist = ticker.history(period="5d")
+                        if not hist.empty:
+                            last_row = hist.iloc[-1]
+                            price = float(last_row["Close"])
+                            volume = volume or int(last_row["Volume"])
+                            
+                            # Calculate change if we have enough data
+                            if len(hist) >= 2:
+                                prev_close = float(hist.iloc[-2]["Close"])
+                                change = price - prev_close
+                                percent_change = (change / prev_close) * 100 if prev_close != 0 else None
+                    except Exception as e:
+                        logger.warning(f"Failed to get history for {symbol}: {e}")
+                
                 mapped = {
                     "symbol": symbol,
-                    "price": None if price is None else float(price),
-                    "change": None if change is None else float(change),
-                    "percent_change": None if pct is None else float(pct),
-                    "volume": None if vol is None else int(vol),
+                    "price": _safe_float(price),
+                    "change": _safe_float(change),
+                    "percent_change": _safe_float(percent_change),
+                    "volume": _safe_int(volume),
                     "raw": {},
                 }
                 results.append(mapped)
                 time.sleep(REQUEST_DELAY_SECONDS + random.uniform(0, 0.5))
                 break
+                
             except Exception as exc:
                 wait = BACKOFF_FACTOR * attempt + random.uniform(0, 1)
                 logger.warning("yfinance error for %s: %s (attempt %d). Retrying in %.1fs", symbol, exc, attempt, wait)

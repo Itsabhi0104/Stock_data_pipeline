@@ -1,26 +1,25 @@
-# docker-compose.yml (use this content / replace your current file)
+# docker-compose.yml
 x-airflow-common: &airflow-common
   build:
     context: .
     dockerfile: docker/Dockerfile
   env_file:
-    - .env                      # <-- read env vars from .env
+    - .env
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: "False"
     AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
-    # Airflow SQLAlchemy connection uses the full connection string (you can keep or construct with env)
-    # If you prefer to build the SQLALCHEMY_CONN from individual variables, you can override below.
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres:5432/stocksdb
-
-    # (Optional) add any defaults here; service-level env_file already loads values
-    # keep placeholders out of this section; actual secrets are in .env
-
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+    AIRFLOW__CORE__ENABLE_XCOM_PICKLING: "True"
   volumes:
     - ./dags:/opt/airflow/dags
     - ./scripts:/opt/airflow/scripts
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
+  depends_on:
+    postgres:
+      condition: service_healthy
 
 services:
   postgres:
@@ -41,33 +40,52 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   airflow-init:
     <<: *airflow-common
-    depends_on:
-      - postgres
     entrypoint: >
-      bash -c "until pg_isready -h postgres -U ${DB_USER}; do echo 'waiting for postgres...'; sleep 1; done;
-               airflow db upgrade;
-               airflow users create --username ${AIRFLOW_ADMIN_USER:-admin} --firstname Admin --lastname User --role Admin --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com} --password ${AIRFLOW_ADMIN_PASSWORD:-admin} || true"
+      bash -c "
+        echo 'Waiting for postgres...'
+        until pg_isready -h postgres -U ${DB_USER} -d ${DB_NAME}; do
+          echo 'Postgres is unavailable - sleeping'
+          sleep 1
+        done
+        echo 'Postgres is up - executing command'
+        airflow db upgrade
+        airflow users create \
+          --username ${AIRFLOW_ADMIN_USER:-admin} \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com} \
+          --password ${AIRFLOW_ADMIN_PASSWORD:-admin} || true
+        echo 'Airflow initialization completed'
+      "
     restart: "no"
 
   airflow-webserver:
     <<: *airflow-common
-    depends_on:
-      - postgres
-      - airflow-init
     ports:
       - "8080:8080"
-    entrypoint: bash -c "airflow webserver"
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     restart: always
 
   airflow-scheduler:
     <<: *airflow-common
-    depends_on:
-      - postgres
-      - airflow-init
-    entrypoint: bash -c "airflow scheduler"
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     restart: always
 
 volumes:
