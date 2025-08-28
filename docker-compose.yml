@@ -1,0 +1,74 @@
+# docker-compose.yml (use this content / replace your current file)
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  env_file:
+    - .env                      # <-- read env vars from .env
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    # Airflow SQLAlchemy connection uses the full connection string (you can keep or construct with env)
+    # If you prefer to build the SQLALCHEMY_CONN from individual variables, you can override below.
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres:5432/stocksdb
+
+    # (Optional) add any defaults here; service-level env_file already loads values
+    # keep placeholders out of this section; actual secrets are in .env
+
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./scripts:/opt/airflow/scripts
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+
+services:
+  postgres:
+    image: postgres:15
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  airflow-init:
+    <<: *airflow-common
+    depends_on:
+      - postgres
+    entrypoint: >
+      bash -c "until pg_isready -h postgres -U ${DB_USER}; do echo 'waiting for postgres...'; sleep 1; done;
+               airflow db upgrade;
+               airflow users create --username ${AIRFLOW_ADMIN_USER:-admin} --firstname Admin --lastname User --role Admin --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com} --password ${AIRFLOW_ADMIN_PASSWORD:-admin} || true"
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    depends_on:
+      - postgres
+      - airflow-init
+    ports:
+      - "8080:8080"
+    entrypoint: bash -c "airflow webserver"
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    depends_on:
+      - postgres
+      - airflow-init
+    entrypoint: bash -c "airflow scheduler"
+    restart: always
+
+volumes:
+  pgdata:
