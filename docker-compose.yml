@@ -44,23 +44,17 @@ services:
 
   airflow-init:
     <<: *airflow-common
-    entrypoint: >
+    command: >
       bash -c "
-        echo 'Waiting for postgres...'
-        until pg_isready -h postgres -U ${DB_USER} -d ${DB_NAME}; do
-          echo 'Postgres is unavailable - sleeping'
-          sleep 1
-        done
-        echo 'Postgres is up - executing command'
-        airflow db upgrade
-        airflow users create \
-          --username ${AIRFLOW_ADMIN_USER:-admin} \
-          --firstname Admin \
-          --lastname User \
-          --role Admin \
-          --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com} \
-          --password ${AIRFLOW_ADMIN_PASSWORD:-admin} || true
-        echo 'Airflow initialization completed'
+      echo 'Waiting for postgres...';
+      until pg_isready -h postgres -U $${DB_USER} -d $${DB_NAME}; do
+        echo 'Postgres is unavailable - sleeping';
+        sleep 1;
+      done;
+      echo 'Postgres is up - executing command';
+      airflow db upgrade;
+      airflow users create --username $${AIRFLOW_ADMIN_USER:-admin} --firstname Admin --lastname User --role Admin --email $${AIRFLOW_ADMIN_EMAIL:-admin@example.com} --password $${AIRFLOW_ADMIN_PASSWORD:-admin} || echo 'User already exists';
+      echo 'Airflow initialization completed';
       "
     restart: "no"
 

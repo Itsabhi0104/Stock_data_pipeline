@@ -1,30 +1,38 @@
 # docker/Dockerfile
-ARG AIRFLOW_IMAGE=apache/airflow:2.6.3
+ARG AIRFLOW_IMAGE=apache/airflow:2.6.3-python3.10
 FROM ${AIRFLOW_IMAGE}
 
-# Copy requirements into image (build context is project root)
+USER root
+
+# Install system dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        g++ \
+        curl \
+    && apt-get autoremove -yqq --purge \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directories
+RUN mkdir -p /opt/airflow/scripts /opt/airflow/logs /opt/airflow/plugins \
+    && chown -R airflow: /opt/airflow/scripts /opt/airflow/logs /opt/airflow/plugins
+
+USER airflow
+
+# Copy requirements
 COPY requirements.txt /tmp/requirements.txt
 
-# Ensure the file is owned by the airflow user then switch to airflow user
-USER root
-RUN chown airflow: /tmp/requirements.txt && chmod 644 /tmp/requirements.txt
+# Install packages with compatible setuptools version
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir "setuptools>=66.0.0,<67.0.0" wheel \
+    && pip install --no-cache-dir -r /tmp/requirements.txt
 
-USER airflow
+# Verify installations
+RUN python -c "import yfinance as yf; print(f'yfinance installed successfully')" \
+    && python -c "import requests; print('requests installed successfully')" \
+    && python -c "import psycopg2; print('psycopg2 installed successfully')"
 
-# Upgrade pip first to avoid potential issues
-RUN pip install --no-cache-dir --upgrade pip
-
-# Install Python deps as the airflow user (allowed by image)
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
-
-# Create scripts folder and ensure permissions
-USER root
-RUN mkdir -p /opt/airflow/scripts && chown -R airflow: /opt/airflow/scripts
-
-# Create logs directory if it doesn't exist
-RUN mkdir -p /opt/airflow/logs && chown -R airflow: /opt/airflow/logs
-
-USER airflow
-
-# Set Python path to include scripts directory
+# Set Python path
 ENV PYTHONPATH="${PYTHONPATH}:/opt/airflow/scripts"
