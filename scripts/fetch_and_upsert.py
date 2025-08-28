@@ -1,17 +1,3 @@
-#!/usr/bin/env python3
-"""
-scripts/fetch_and_upsert.py
-
-Enhanced stock data fetcher with improved error handling and multiple fallback mechanisms.
-Supports yfinance with better rate limiting and fallback strategies.
-
-Provider selection via environment:
-  MARKET_PROVIDER = "yfinance" | "alphavantage" | "yahoo_direct"   (default: "yfinance")
-
-DB config via env:
-  DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASS
-SYMBOLS env: comma-separated (SYMBOLS)
-"""
 from __future__ import annotations
 
 import os
